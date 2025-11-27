@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 
 def main():
     # make a separate excel spreadsheet for each movie, this will allow for a cohesive graph
-    reader = pd.read_excel('C:\\Users\\Pami Banerjee\\OneDrive - University of Pittsburgh\\Desktop\\Camirand Lab Research Documents\\M114 Cre- Matrix.xlsx')
+    reader = pd.read_excel('Input File Name Goes Here')
     contact = reader['Contact']
     spike   = reader['Spike']
 
@@ -34,7 +34,5 @@ def main():
     plt.tight_layout()
     plt.show()
 
-# Example usage:
-if __name__ == '__main__':
-    path = r'C:\Users\Pami Banerjee\OneDrive - University of Pittsburgh\Desktop\Camirand Lab Research Documents\M795 Matrix Kristina.xlsx'
+
     main()
