@@ -1,7 +1,8 @@
-# Write your code here :-)
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+
+# The purpose of this script is to create a four quadrant graph that compares T-cells in different conditions : spiking, not spiking, contact with APC, no contact with APC
 
 def main():
     # make a separate excel spreadsheet for each movie, this will allow for a cohesive graph
@@ -11,12 +12,7 @@ def main():
 
     x=contact + np.random.uniform(-0.1, 0.1, size=len(contact))
     y=spike + + np.random.uniform(-0.1, 0.1, size=len(spike))
-    """
-    Reads an Excel file and makes a scatter plot:
-      - X-axis = Contact (0=no, 1=yes)
-      - Y-axis = Spike   (0=no, 1=yes)
-    """
-
+    
 
     # 3. Plot
     plt.figure(figsize=(6,6))
