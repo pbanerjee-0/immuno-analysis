@@ -11,7 +11,7 @@ import math
 
 
 def main():
-    reader_path = r'C:\Users\Pami Banerjee\OneDrive - University of Pittsburgh\Desktop\Camirand Lab Research Documents\M796 Matrix.xlsx'
+    reader_path = r'Input File Name Goes Here'
     reader = pd.read_excel(reader_path)
 
     time = 16.466
