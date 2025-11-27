@@ -9,6 +9,8 @@ import pandas as pd
 import os
 import math
 
+# The purpose of this script is to find the duration of every individual calcium spike and contact with APC in the moving using an AUC analysis with scipy.
+# The goal is to analyze how frequent calcium spikes are across different datasets, and how the duration of the spike varies.
 
 def main():
     reader_path = r'Input File Name Goes Here'
