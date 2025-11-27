@@ -35,7 +35,7 @@ def main():
     # Read all the data from the Excel file using reader, a pandas object.
     # Paste file path between parentheses to read Excel Sheet
     # This is a line that you would change depending on where you get the Excel data from for the matrix
-    reader = pd.read_excel('C:\\Users\\Pami Banerjee\\OneDrive - University of Pittsburgh\\Desktop\\Camirand Lab Research Documents\\M796 Matrix.xlsx')
+    reader = pd.read_excel('Input File Name Goes Here')
 
 
 
