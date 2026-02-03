@@ -1,7 +1,7 @@
 # Computational Analysis of Immune Cell Dynamics
 
 ## Project Overview
-This repository contains a specialized computational pipeline developed during my tenure at the Starzl Institute (UPMC) to analyze high-resolution longitudinal imaging data of T-cells (CD8+, CD4+, and Tregs). The primary objective is the quantification of calcium signaling dynamics—a critical indicator of immune response activation.
+This repository contains a specialized computational pipeline developed during my time at the Starzl Institute (UPMC) to analyze high-resolution longitudinal imaging data of T-cells (CD8+, CD4+, and Tregs). The primary objective is the quantification of calcium signaling dynamics—a critical indicator of immune response activation.
 
 ## The Challenge: Dynamic Baseline Normalization
 In biological datasets, calcium spike intensity and average concentrations fluctuate significantly across different cell tracks and experiments. To ensure accurate analysis, the definition of a "calcium spike" must be adaptive rather than static. This pipeline implements a statistical approach to establish dynamic thresholds for every individual dataset.
@@ -24,6 +24,7 @@ In biological datasets, calcium spike intensity and average concentrations fluct
 ## Tech Stack
 * **Language:** Python
 * **Data Manipulation:** Pandas, NumPy
+* **Machine Learning and Modeling:** Scikit-learn
 * **Scientific Computing:** SciPy (Signal Processing)
 * **Visualization:** Matplotlib
 * **Statistical Analysis:** Linear Regression
