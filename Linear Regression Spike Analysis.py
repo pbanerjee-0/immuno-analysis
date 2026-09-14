@@ -1,144 +1,213 @@
 from sklearn.linear_model import LinearRegression
+from scipy.interpolate import make_interp_spline
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.integrate import simpson
+from scipy.signal import find_peaks
+from numpy import trapezoid
 import pandas as pd
+import os
+import math
+import argparse
+from openpyxl.styles import Font
+from matplotlib.ticker import MaxNLocator
 
 
-# Load data for a specific movie
 def movieRead(reader, movie_name):
-    # Filter for the specific movie, using copy to avoid warnings
-    movie = reader[(reader['Movie ID'] == movie_name)].copy()
+
+    # process contents of the Imaris software export and copy it into a new dataFrame
+    movie = reader[(reader["Movie ID"] == movie_name)].copy()
 
     if movie.empty:
-        print(f"Warning: No data found for movie {movie_name}")
-        
+        print(f"Warning: No dynamic parameters or calcium data found for movie {movie_name}'s Imaris export.")
+
     return movie
 
-# Calculate per track ratios for each movie
-def calculate_track_ratios(movie):
-    # For each Track ID, compute the following parameters
-    track_stats = movie.groupby('Track ID').agg({
-        'Spike': 'sum',               # Sum of 1s gives total spiking cells
-        'Contact': 'sum',             # Sum of 1s gives total contacting cells
-        'Spike and Contact': 'sum',   # Sum of 1s gives total "both" cells
-        'Track ID': 'count',          # Counting rows gives total surfaces/duration
-        'T-Cell Subset': 'first'      # Read the label of the T-Cell subset (CD8 or TReg)
-    })
 
-    # Rename columns
-    track_stats = track_stats.rename(columns={
-        'Spike': 'Spiking Cells',
-        'Contact': 'Contacts',
-        'Spike and Contact': 'Spike and Contact',
-        'Track ID': 'Surfaces',
-        'T-Cell Subset': 'Cell Type'
-    })
+# after obtaining spike threshold from regression, find the number of spikes and contacts based on YFP-CFP ratios
+def adjust_spike(spike_threshold, movie, cfp_col, yfp_col, apc_col):
 
-    # Calculate all ratios simultaneously
+    # distance from the threshold lines signifies the distance of a given point from the spike threshold point and aa positive distance indicates a spike
+    movie["Distance from Threshold Line"] = movie[yfp_col] - (movie[cfp_col] * spike_threshold)
+
+    # spike value of a timepoint is set to 1 if dist from threshold > 0, else it is 0. spikes are 1's
+    movie["Spike"] = (movie["Distance from Threshold Line"] > 0).astype(int)
+
+    # contact value of a timepoint is set to 1 if shortest dist to APC < 1, else it is 0. contacts are 1's
+    movie["Contact"] = (movie[apc_col] < 1).astype(int)
+
+
+# linear regression analysis and plotting of data
+def analyze_and_plot_regression(movie_data, movie_name, threshold_multiplier=1.4):
     
-    # Spike Ratio = Spiking Cells / Total Surfaces
-    track_stats['Spike Ratio'] = track_stats['Spiking Cells'] / track_stats['Surfaces']
-    
-    # Contact Ratio = Contacts / Total Surfaces
-    track_stats['Contact Ratio'] = track_stats['Contacts'] / track_stats['Surfaces']
-    
-    # Spiking Contact Ratio = (Spike & Contact) / Contacts
-    track_stats['Spiking Contact Ratio'] = (
-        track_stats['Spike and Contact']
-        .div(track_stats['Contacts'])
-        .fillna(0)  # Handle division by zero
-    )
+    # find the names of the intensity columns. CFP should be first, then YFP, in the Imaris file. if not, analysis will be incorrect
+    intensity_col_names = [col for col in movie_data.columns if "Intensity" in col]
+    cfp_col_name = intensity_col_names[0]
+    yfp_col_name = intensity_col_names[1]
 
-    # 4. Reset index
-    track_stats = track_stats.reset_index()
-    
-    return track_stats
+    # use column names to extract data and convert to np arrays to perform regression
+    cfpData = movie_data[cfp_col_name]
+    yfpData = movie_data[yfp_col_name]
 
-# Linear Regression Analysis and Plotting of Data
-def analyze_and_plot_regression(movie_data, movie_name):
-    # Extract data using the passed dataframe
-    cfpData = movie_data['CFP Intensity']
-    yfpData = movie_data['YFP Intensity']
-
-    # Convert to numpy arrays
     x = cfpData.to_numpy().reshape(-1, 1)
     y = yfpData.to_numpy().reshape(-1, 1)
 
-    # Linear regression - force the line to pass through (0, 0)
+    if len(x) == 0:
+        print(f"No data to plot for {movie_name}")
+        return
+
     model = LinearRegression(fit_intercept=False)
     model.fit(x, y)
-
-    # Predicting a baseline
     baseLine = model.predict(x)
 
-    # Plot data points and regression line
-    plt.scatter(x, y, color='grey', label='Data Points', alpha=0.5) # alpha makes points transparent
-    plt.plot(x, baseLine, color='black', label=f'Regression Line (y = {model.coef_[0][0]:.2f}x)')
+    plt.figure(figsize=(10, 6))  # Set a standard size
+    plt.scatter(x, y, color="grey", label="Data Points", alpha=0.1, s=10)
+    plt.plot(
+        x,
+        baseLine,
+        color="black",
+        label=f"Regression Line (y = {model.coef_[0][0]:.2f}x)",
+    )
 
-    # Adding another line to signify spikes
+    # compute and plot spike threshold line
     spikeSlope = model.coef_[0][0]
-    spikeInter = 0
-    spikeLine = 1.4 * (spikeSlope * x + spikeInter)
-    plt.plot(x, spikeLine, color='magenta', linestyle='--', label=f'Spike Threshold (y = {spikeSlope*1.4:.2f}x)')
+    spikeLine = threshold_multiplier * (spikeSlope * x)
+    plt.plot(
+        x,
+        spikeLine,
+        color="magenta",
+        linestyle="--",
+        label=f"Spike Threshold (y = {spikeSlope*threshold_multiplier:.2f}x)",
+    )
 
-    # Calculations for print output
+    ax = plt.gca()  # get current axis
+
+    # this ensures about 10 ticks maximum, choosing multiples of 2, 5, or 10 automatically
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=10, integer=True))
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=10, integer=True))
+
+    # dynamic scaling of data
+    # add a 5% buffer so data points aren't hugging the edge of the box
+    x_max = np.max(x) * 1.05
+    y_max = np.max(y) * 1.05
+    plt.xlim(0, x_max)
+    plt.ylim(0, y_max)
+
+    # add grid to read scalability
+    plt.grid(True, linestyle=":", alpha=0.6)
+
+    # stats and formatting
     aboveSpike = (y > spikeLine).sum()
     totalCells = len(y)
     ratio = aboveSpike / totalCells
 
-    print(f"--- Regression Stats for {movie_name} ---")
-    print(f"Total number of cells: {totalCells}")
-    print(f"Number of cells above threshold: {aboveSpike}")
-    print(f"Ratio of spiking cells: {ratio:.4f}")
-
-    # Graph Formatting
-    plt.xlabel('CFP Intensity')
-    plt.ylabel('YFP Intensity')
-    plt.title(f'Linear Regression of CFP vs YFP Data for {movie_name}')
+    plt.xlabel("CFP Intensity")
+    plt.ylabel("YFP Intensity")
+    plt.title(f"Linear Regression: {movie_name}")
     plt.legend()
-    
-    # Axis handling
-    if len(x) > 0:
-        plt.xticks(np.arange(0, np.max(x) + 1, step=20)) # Changed step to 20 for readability
-        plt.yticks(np.arange(0, np.max(y) + 1, step=20))
-    
-    plt.ylim(bottom=0)
+
+    plt.tight_layout()
     plt.show()
 
-    print(f"Equation: y = {spikeSlope:.2f}x")
+    print(f"--- Stats for {movie_name} ---")
 
+    # pass calculated spike threshold on to adjust_spike
+    print(
+        f"Total Cells: {totalCells} | Spiking: {aboveSpike} | Threshold: {spikeSlope*threshold_multiplier} | Ratio of Spiking Cells to Total Cells: {ratio:.4f}"
+    )
+    return spikeSlope * threshold_multiplier
+
+
+# styling
+def bold_header(filename):
+    from openpyxl import load_workbook
+
+    wb = load_workbook(filename)
+    for sheetname in wb.sheetnames:
+        ws = wb[sheetname]
+        for cell in ws[1]:  # Row 1
+            cell.font = Font(bold=True)
+    wb.save(filename)
 
 
 def main():
-    # 1. SETUP
-    reader_path = 'Input File Name Goes Here' # <--- UPDATE THIS
-    movie_id = 'M796_D'                       # <--- UPDATE THIS
-    
+    parser = argparse.ArgumentParser(
+        description="Calculate spike threshold for a specific set of T-Cell data. Accounts for variation in signal intensity for calcium."
+    )
+    parser.add_argument("filename", help="The raw Excel file exported from Imaris")
+    parser.add_argument("--movie_id", default="A", help="ID for the current movie")
+    parser.add_argument(
+        "--threshold_multiplier",
+        type=float,
+        default=1.4,
+        help="Multiplier for spike threshold (default: 1.4)",
+    )
+    parser.add_argument("--qc", action="store_true",
+                    help="Filter top 1%% of CFP and YFP intensities before regression")
+
+
+    # command line arguments allow user to choose a file name for a specific mouse in the experiment and a movie ID from that file
+    args = parser.parse_args()
+    reader_path = args.filename
+    movie_id = args.movie_id
     try:
-        reader = pd.read_excel(reader_path)
+        reader = pd.read_excel(reader_path, skiprows=1)
     except FileNotFoundError:
-        print("Error: File not found. Check the file path.")
+        print("Error: File not found.")
         return
-
-    # 2. LOAD DATA
-    movie_data = movieRead(reader, movie_id)
-    
+    if "Movie ID" in reader.columns:
+        movie_data = movieRead(reader, movie_id)
+    else:
+        movie_data = reader.copy()
+        movie_data["Movie ID"] = movie_id
     if movie_data.empty:
-        return 
-
-    # 3. CALCULATE RATIOS
-    df_B = calculate_track_ratios(movie_data)
-    df_B['Dataset'] = 'BTracks' 
-
-    # 4. EXPORT TO EXCEL
-    output_filename = f'{movie_id}_TrackRatios.xlsx'
-    with pd.ExcelWriter(output_filename, engine='openpyxl') as writer:
-        df_B.to_excel(writer, sheet_name='Tracks', index=False)
-        
-    print(f"✅ Data exported successfully to {output_filename}")
+        return
+    intensity_cols = [col for col in movie_data.columns if "Intensity" in col]
     
-    # 5. RUN REGRESSION ANALYSIS
-    analyze_and_plot_regression(movie_data, movie_id)
+    if len(intensity_cols) < 2:
+        print(
+            f"Error: Expected at least 2 'Intensity' columns, found: {intensity_cols}"
+        )
+        return
+    apc_options = [
+        col
+        for col in movie_data.columns
+        if "shortest distance" in col.lower() and "apc" in col.lower()
+    ]
+    if not apc_options:
+        print(
+            f"Error: APC column not found. Found these columns instead: {list(movie_data.columns)}"
+        )
+        return
+    apc_col = apc_options[0]
+
+    if args.qc:
+        cfp_upper = movie_data[intensity_cols[0]].quantile(0.99)
+        yfp_upper = movie_data[intensity_cols[1]].quantile(0.99)
+        n_before = len(movie_data)
+        movie_data = movie_data[(movie_data[intensity_cols[0]] <= cfp_upper) & (movie_data[intensity_cols[1]] <= yfp_upper)]
+        n_after = len(movie_data)
+        print(f"QC filter applied: removed {n_before - n_after} outlier rows (top 1% CFP or YFP intensity)")
+
+    final_threshold = analyze_and_plot_regression(movie_data, movie_id, args.threshold_multiplier)
+
+    if final_threshold is None:
+        print(f"Error: Regression failed for {movie_id}. No output written.")
+        return
+    adjust_spike(
+        final_threshold, movie_data, intensity_cols[0], intensity_cols[1], apc_col
+    )
+
+    output_dir = os.path.dirname(os.path.abspath(args.filename))
+    output_path = os.path.join(output_dir, f"{movie_id}_Threshold_Analysis.xlsx")
+    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+        movie_data.to_excel(writer, sheet_name="All", index=False)
+        if "Surpass Object" in movie_data.columns:
+            for cell_type, group in movie_data.groupby("Surpass Object"):
+                group.to_excel(writer, sheet_name=str(cell_type)[:31], index=False)
+    bold_header(output_path)
+    print(f"Final analysis exported to {output_path}")
+
 
 if __name__ == "__main__":
     main()
