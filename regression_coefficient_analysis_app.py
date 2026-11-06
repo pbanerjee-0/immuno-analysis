@@ -1,4 +1,4 @@
-gtifrom sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LinearRegression
 from scipy.interpolate import make_interp_spline
 import matplotlib.pyplot as plt
 import numpy as np
@@ -30,15 +30,19 @@ movie = (
 
 # only select the String column names for proper filtering
 movie.columns = movie.columns.astype(str)
-channels = movie.columns[movie.columns.str.contains("Intensity")].tolist()
+yfp_cfp = movie.columns[movie.columns.str.contains("Intensity")].tolist()
+apc_shortest_dist= movie.columns[movie.columns.str.contains("Shortest Distance") & movie.columns.str.contains("APC")].tolist()
 
-if len(channels) < 2:
-    st.error(f"Expected at least 2 'Intensity' columns, found: {channels}")
+if len(yfp_cfp) < 2:
+    st.error(f"Expected at least 2 'Intensity' columns, found: {yfp_cfp}")
+    st.stop()
+if len(apc_shortest_dist) < 1:
+    st.error(f"Expected at least 1 'Shortest Distance' column for APC, found: {apc_shortest_dist}")
     st.stop()
 
 # index=1 on CFP so the two dropdowns don't start on the same column
-yfp_channel = st.selectbox("Select YFP Channel", options=channels, index=0)
-cfp_channel = st.selectbox("Select CFP Channel", options=channels, index=1)
+yfp_channel = st.selectbox("Select YFP Channel", options=yfp_cfp, index=0)
+cfp_channel = st.selectbox("Select CFP Channel", options=yfp_cfp, index=1)
 
 if yfp_channel == cfp_channel:
     st.warning("YFP and CFP are set to the same channel.")
@@ -170,84 +174,22 @@ def bold_header(filename):
     wb.save(filename)
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Calculate spike threshold for a specific set of T-Cell data. Accounts for variation in signal intensity for calcium."
-    )
-    parser.add_argument("filename", help="The raw Excel file exported from Imaris")
-    parser.add_argument("--movie_id", default="A", help="ID for the current movie")
-    parser.add_argument(
-        "--threshold_multiplier",
-        type=float,
-        default=1.4,
-        help="Multiplier for spike threshold (default: 1.4)",
-    )
-    parser.add_argument("--qc", action="store_true",
-                    help="Filter top 1%% of CFP and YFP intensities before regression")
-
-
-    # command line arguments allow user to choose a file name for a specific mouse in the experiment and a movie ID from that file
-    args = parser.parse_args()
-    reader_path = args.filename
-    movie_id = args.movie_id
-    try:
-        reader = pd.read_excel(reader_path, skiprows=1)
-    except FileNotFoundError:
-        print("Error: File not found.")
-        return
-    if "Movie ID" in reader.columns:
-        movie_data = movieRead(reader, movie_id)
+if run():
+    if "Movie ID" in movie.columns:
+        movie_data = movieRead(movie, movie_id)
     else:
-        movie_data = reader.copy()
+        movie_data = movie.copy()
         movie_data["Movie ID"] = movie_id
     if movie_data.empty:
-        return
-    intensity_cols = [col for col in movie_data.columns if "Intensity" in col]
-    
-    if len(intensity_cols) < 2:
-        print(
-            f"Error: Expected at least 2 'Intensity' columns, found: {intensity_cols}"
-        )
-        return
-    apc_options = [
-        col
-        for col in movie_data.columns
-        if "shortest distance" in col.lower() and "apc" in col.lower()
-    ]
-    if not apc_options:
-        print(
-            f"Error: APC column not found. Found these columns instead: {list(movie_data.columns)}"
-        )
-        return
-    apc_col = apc_options[0]
+        st.warning(f"No data found for Movie ID {movie_id}.")
+        st.stop()
 
-    if args.qc:
-        cfp_upper = movie_data[intensity_cols[0]].quantile(0.99)
-        yfp_upper = movie_data[intensity_cols[1]].quantile(0.99)
+    if qc:
+        cfp_upper = movie_data[cfp_channel].quantile(0.99)
+        yfp_upper = movie_data[yfp_channel].quantile(0.99)
         n_before = len(movie_data)
-        movie_data = movie_data[(movie_data[intensity_cols[0]] <= cfp_upper) & (movie_data[intensity_cols[1]] <= yfp_upper)]
+        movie_data = movie_data[(movie_data[cfp_channel] <= cfp_upper) & (movie_data[yfp_channel] <= yfp_upper)]
         n_after = len(movie_data)
-        print(f"QC filter applied: removed {n_before - n_after} outlier rows (top 1% CFP or YFP intensity)")
+        st.write(f"QC filter applied: removed {n_before - n_after} outlier rows (top 1% CFP or YFP intensity)")
+   
 
-    final_threshold = analyze_and_plot_regression(movie_data, movie_id, args.threshold_multiplier)
-
-    if final_threshold is None:
-        print(f"Error: Regression failed for {movie_id}. No output written.")
-        return
-    adjust_spike(
-        final_threshold, movie_data, intensity_cols[0], intensity_cols[1], apc_col
-    )
-
-    output_dir = os.path.dirname(os.path.abspath(args.filename))
-    output_path = os.path.join(output_dir, f"{movie_id}_Threshold_Analysis.xlsx")
-    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        movie_data.to_excel(writer, sheet_name="All", index=False)
-        if "Surpass Object" in movie_data.columns:
-            for cell_type, group in movie_data.groupby("Surpass Object"):
-                group.to_excel(writer, sheet_name=str(cell_type)[:31], index=False)
-    bold_header(output_path)
-    print(f"Final analysis exported to {output_path}")
-
-
-# if __name__ == "__main__":
-#    main()
