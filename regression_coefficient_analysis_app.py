@@ -174,7 +174,7 @@ def bold_header(filename):
     wb.save(filename)
 
 
-if run():
+if run:
     if "Movie ID" in movie.columns:
         movie_data = movieRead(movie, movie_id)
     else:
