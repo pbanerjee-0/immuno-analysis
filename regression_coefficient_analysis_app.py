@@ -68,7 +68,7 @@ def movieRead(reader, movie_name):
     return movie
 
 
-# after obtaining spike threshold from regression, find the number of spikes and contacts based on YFP-CFP ratios
+# after obtaining spike threshold from regression, update the number of spikes and contacts based on the new threshold to allow downstream calculation of YFP CFP ratios
 def adjust_spike(spike_threshold, movie, cfp_col, yfp_col, apc_col):
 
     # distance from the threshold lines signifies the distance of a given point from the spike threshold point and aa positive distance indicates a spike
@@ -104,9 +104,9 @@ def analyze_and_plot_regression(movie_data, movie_name, threshold_multiplier=1.4
     model.fit(x, y)
     baseLine = model.predict(x)
 
-    plt.figure(figsize=(10, 6))  # Set a standard size
-    plt.scatter(x, y, color="grey", label="Data Points", alpha=0.1, s=10)
-    plt.plot(
+    (fig, ax) = plt.subplots(figsize=(10, 6))  # Set a standard size
+    ax.scatter(x, y, color="grey", label="Data Points", alpha=0.1, s=10)
+    ax.plot(
         x,
         baseLine,
         color="black",
@@ -116,7 +116,7 @@ def analyze_and_plot_regression(movie_data, movie_name, threshold_multiplier=1.4
     # compute and plot spike threshold line
     spikeSlope = model.coef_[0][0]
     spikeLine = threshold_multiplier * (spikeSlope * x)
-    plt.plot(
+    ax.plot(
         x,
         spikeLine,
         color="magenta",
@@ -151,14 +151,14 @@ def analyze_and_plot_regression(movie_data, movie_name, threshold_multiplier=1.4
     plt.legend()
 
     plt.tight_layout()
-    plt.show()
+    st.pyplot(fig)
+    plt.close(fig)
 
-    print(f"--- Stats for {movie_name} ---")
+    st.metric(f"--- Stats for {movie_name} ---", value=f"Total Cells: {totalCells}")
+    st.metric("Spiking", value=f"{aboveSpike}")
+    st.metric("Threshold", value=f"{spikeSlope*threshold_multiplier}")
+    st.metric("Ratio", value=f"{ratio:.4f}")
 
-    # pass calculated spike threshold on to adjust_spike
-    print(
-        f"Total Cells: {totalCells} | Spiking: {aboveSpike} | Threshold: {spikeSlope*threshold_multiplier} | Ratio of Spiking Cells to Total Cells: {ratio:.4f}"
-    )
     return spikeSlope * threshold_multiplier
 
 
@@ -193,3 +193,11 @@ if run:
         st.write(f"QC filter applied: removed {n_before - n_after} outlier rows (top 1% CFP or YFP intensity)")
    
 
+    spike_threshold = analyze_and_plot_regression(movie_data, movie_id, threshold_multiplier)
+    if spike_threshold is not None:
+        adjust_spike(spike_threshold, movie_data, cfp_channel, yfp_channel, apc_shortest_dist[0])
+        st.write("Analysis complete. Here are the first few rows of the processed data:")
+        st.dataframe(movie_data.head())
+    else:
+        st.error("Analysis could not be completed due to insufficient data.")
+        st.stop()
