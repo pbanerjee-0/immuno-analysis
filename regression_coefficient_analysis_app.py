@@ -201,3 +201,22 @@ if run:
     else:
         st.error("Analysis could not be completed due to insufficient data.")
         st.stop()
+
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        movie_data.to_excel(writer, sheet_name="All", index=False)
+        if "Surpass Object" in movie_data.columns:
+            for cell_type, group in movie_data.groupby("Surpass Object"):
+                group.to_excel(writer, sheet_name=str(cell_type)[:31], index=False)
+
+        # bold the header row of every sheet (replaces bold_header)
+        for ws in writer.book.worksheets:
+            for cell in ws[1]:
+                cell.font = Font(bold=True)
+
+    st.download_button(
+        label="Download results (Excel)",
+        data=buffer.getvalue(),
+        file_name=f"{movie_id}_Threshold_Analysis.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
