@@ -12,6 +12,7 @@ import argparse
 from openpyxl.styles import Font
 from matplotlib.ticker import MaxNLocator
 import streamlit as st
+from io import BytesIO
 
 # Imaris file is only for one movie, need to account for Imaris export headings
 st.title("T-Cell Calcium Spike Threshold Analysis")
