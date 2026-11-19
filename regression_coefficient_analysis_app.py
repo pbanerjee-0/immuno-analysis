@@ -145,16 +145,97 @@ def noise_calibrated_threshold_finder(movie_data):
 
     # median of all the YFP-CFP ratios in the movie
     median_ratio=np.median(ratio)
-    lower_spread=ratio[ratio<=median_ratio]
 
-    threshold=median_ratio+1.5*lower_spread
+    # measure how far each value in the lower half is from the median ratio
+    lower_half=ratio[ratio<=median_ratio]
+    deviations = median_ratio - lower_half
 
- 
+    lower_spread = 1.4826 * np.median(deviations)
+
+    lower_spread = max(lower_spread, 0.1)
+
+    threshold = median_ratio + 1.5 * lower_spread
+
+    return threshold, median_ratio
+
+
+
+
+def plot_spikes(movie_data, movie_name, threshold, median_ratio):
+    cfpData = movie_data[cfp_channel]
+    yfpData = movie_data[yfp_channel]
+
+    valid = np.isfinite(cfpData) & np.isfinite(yfpData)
+    x = cfpData[valid].to_numpy()
+    y = yfpData[valid].to_numpy()
+
+    if len(x) == 0:
+        st.warning(f"No valid data to plot for {movie_name}")
+        return
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.scatter(x, y, color="grey", alpha=0.25, s=10, label="Data Points")
+
+    x_max = max(float(np.max(x)) * 1.05, 1.0)
+    y_max = max(float(np.max(y)) * 1.05, 1.0)
+    x_line = np.linspace(0, x_max, 100)
+
+    # baseline line: median YFP/CFP ratio
+    ax.plot(
+        x_line,
+        median_ratio * x_line,
+        color="black",
+        linestyle="-",
+        label=f"Baseline Median Ratio (y = {median_ratio:.2f}x)",
+    )
+
+    # spike threshold line from noise_calibrated_threshold_finder
+    ax.plot(
+        x_line,
+        threshold * x_line,
+        color="magenta",
+        linestyle="--",
+        label=f"Spike Threshold (y = {threshold:.2f}x)",
+    )
+
+    ax.set_xlim(0, x_max)
+    ax.set_ylim(0, y_max)
+    ax.set_xlabel("CFP Intensity")
+    ax.set_ylabel("YFP Intensity")
+    ax.set_title(f"YFP to CFP Ratio: {movie_name}")
+    ax.grid(True, linestyle=":", alpha=0.6)
+    ax.legend()
+
+    fig.tight_layout()
+    st.pyplot(fig)
+    plt.close(fig)
+
+    # count points above the new spike threshold line and compute % of total
+    above_spike = int((y > threshold * x).sum())
+    total_surfaces = len(y)
+    pct_spiking = (above_spike / total_surfaces) * 100
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Spiking Surfaces", f"{above_spike} / {total_surfaces}")
+    col2.metric("% Spiking Surfaces", f"{pct_spiking:.2f}%")
+    col3.metric("Noise Threshold Ratio", f"{threshold:.3f}")
+
+    ax.set_xlim(0, x_max)
+    ax.set_ylim(0, y_max)
+    ax.set_xlabel("CFP Intensity")
+    ax.set_ylabel("YFP Intensity")
+    ax.set_title(f"YFP to CFP Ratio: {movie_name}")
+    ax.grid(True, linestyle=":", alpha=0.6)
+    ax.legend()
+
+    fig.tight_layout()
+    st.pyplot(fig)
+    plt.close(fig)
+
+    
 # old method for finding threshold by fitting YFP to CFP ratios to a regression line for each dataset
 def analyze_and_plot_regression(movie_data, movie_name, threshold_multiplier=1.4):
     
-    # find the names of the intensity columns. CFP should be first, then YFP, in the Imaris file. if not, analysis will be incorrect
-
     # use column names to extract data and convert to np arrays to perform regression
     cfpData = movie_data[cfp_channel]
     yfpData = movie_data[yfp_channel]
@@ -259,8 +340,11 @@ if run:
         st.write(f"QC filter applied: removed {n_before - n_after} outlier rows (top 1% CFP or YFP intensity)")
    
 
-    spike_threshold = analyze_and_plot_regression(movie_data, movie_id, threshold_multiplier)
+    # spike_threshold = analyze_and_plot_regression(movie_data, movie_id, threshold_multiplier)
+    spike_threshold, median_ratio=noise_calibrated_threshold_finder(movie_data)
+
     if spike_threshold is not None:
+        plot_spikes(movie_data, movie_id, spike_threshold, median_ratio)
         adjust_spike(spike_threshold, movie_data, cfp_channel, yfp_channel, apc_shortest_dist[0])
         st.write("Analysis complete. Here are the first few rows of the processed data:")
         st.dataframe(movie_data.head())
@@ -276,6 +360,7 @@ if run:
     else:
         celltype_col = None
 
+    # once the spike threshold is locked in, the track ratios can be calculated
     tracks = calculate_track_ratios(movie_data, track_col, celltype_col)
     st.write("Per-track ratios:")
     st.dataframe(tracks)
