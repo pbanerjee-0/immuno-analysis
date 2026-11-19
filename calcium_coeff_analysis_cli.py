@@ -36,6 +36,7 @@ def adjust_spike(spike_threshold, movie, cfp_col, yfp_col, apc_col):
     # contact value of a timepoint is set to 1 if shortest dist to APC < 1, else it is 0. contacts are 1's
     movie["Contact"] = (movie[apc_col] < 1).astype(int)
 
+    movie["Spike and Contact"] = ((movie["Spike"] == 1) & (movie["Contact"] == 1)).astype(int)
 
 # linear regression analysis and plotting of data
 def analyze_and_plot_regression(movie_data, movie_name, threshold_multiplier=1.4):
