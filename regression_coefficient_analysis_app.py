@@ -151,7 +151,6 @@ def noise_calibrated_threshold_finder(movie_data):
     deviations = median_ratio - lower_half
 
     lower_spread = 1.4826 * np.median(deviations)
-
     lower_spread = max(lower_spread, 0.1)
 
     threshold = median_ratio + 1.5 * lower_spread
@@ -173,142 +172,79 @@ def plot_spikes(movie_data, movie_name, threshold, median_ratio):
         st.warning(f"No valid data to plot for {movie_name}")
         return
 
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.scatter(x, y, color="grey", alpha=0.25, s=10, label="Data Points")
+    # same rule as adjust_spike: a surface spikes if YFP is above threshold * CFP
+    is_spike = y > threshold * x
+    n_spike = int(is_spike.sum())
+    n_total = len(y)
+    pct_spiking = n_spike / n_total * 100
 
-    x_max = max(float(np.max(x)) * 1.05, 1.0)
-    y_max = max(float(np.max(y)) * 1.05, 1.0)
-    x_line = np.linspace(0, x_max, 100)
+    # colors (dark pink for spiking points, brighter magenta kept for the threshold line)
+    SPIKE_COLOR = "#C2185B"
+    LINE_COLOR = "#E91E8C"
+    GREY = "#8C8C8C"
 
-    # baseline line: median YFP/CFP ratio
-    ax.plot(
-        x_line,
-        median_ratio * x_line,
-        color="black",
-        linestyle="-",
-        label=f"Baseline Median Ratio (y = {median_ratio:.2f}x)",
+    with plt.rc_context({"font.size": 14, "axes.titlesize": 18, "axes.labelsize": 16}):
+        fig, ax = plt.subplots(figsize=(10, 7))
+
+        x_max = max(float(np.max(x)) * 1.05, 1.0)
+        y_max = max(float(np.max(y)) * 1.05, 1.0)
+        x_line = np.linspace(0, x_max, 200)
+
+        # light pink shading over the region above the threshold (the "spiking zone")
+        ax.fill_between(x_line, threshold * x_line, y_max, color=SPIKE_COLOR, alpha=0.06, linewidth=0, zorder=0)
+
+        # non-spiking surfaces (grey) first, spiking surfaces (dark pink) on top
+        ax.scatter(x[~is_spike], y[~is_spike], s=28, color=GREY, alpha=0.35,
+                   edgecolors="none", zorder=2, label=f"Non-spiking (n = {n_total - n_spike})")
+        ax.scatter(x[is_spike], y[is_spike], s=36, color=SPIKE_COLOR, alpha=0.85,
+                   edgecolors="white", linewidths=0.4, zorder=3, label=f"Spiking (n = {n_spike})")
+
+        # baseline (median ratio) and spike threshold lines
+        ax.plot(x_line, median_ratio * x_line, color="black", linewidth=2, zorder=4,
+                label=f"Baseline median ratio (y = {median_ratio:.2f}x)")
+        ax.plot(x_line, threshold * x_line, color=LINE_COLOR, linestyle="--", linewidth=2.5, zorder=4,
+                label=f"Spike threshold (y = {threshold:.2f}x)")
+
+        # percent spiking, clearly visible in the upper left
+        ax.text(0.03, 0.97, f"{pct_spiking:.1f}% spiking surfaces\n({n_spike} of {n_total})",
+                transform=ax.transAxes, ha="left", va="top", fontsize=18, fontweight="bold",
+                color=SPIKE_COLOR, zorder=5,
+                bbox=dict(boxstyle="round,pad=0.5", facecolor="white", edgecolor=SPIKE_COLOR, linewidth=2))
+
+        ax.set_xlim(0, x_max)
+        ax.set_ylim(0, y_max)
+        ax.set_xlabel("CFP intensity")
+        ax.set_ylabel("YFP intensity")
+        ax.set_title(f"YFP vs CFP intensity: {movie_name}", fontweight="bold")
+        ax.grid(True, linestyle=":", alpha=0.5)
+        ax.set_axisbelow(True)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=8))
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=8))
+        ax.legend(loc="lower right", frameon=True, framealpha=0.95, fontsize=12)
+
+        fig.tight_layout()
+        st.pyplot(fig)
+
+        # high-resolution copy for the poster
+        png_buffer = BytesIO()
+        fig.savefig(png_buffer, format="png", dpi=300, bbox_inches="tight")
+        plt.close(fig)
+
+    st.download_button(
+        label="Download plot (PNG, 300 dpi)",
+        data=png_buffer.getvalue(),
+        file_name=f"{movie_name}_spike_plot.png",
+        mime="image/png",
     )
-
-    # spike threshold line from noise_calibrated_threshold_finder
-    ax.plot(
-        x_line,
-        threshold * x_line,
-        color="magenta",
-        linestyle="--",
-        label=f"Spike Threshold (y = {threshold:.2f}x)",
-    )
-
-    ax.set_xlim(0, x_max)
-    ax.set_ylim(0, y_max)
-    ax.set_xlabel("CFP Intensity")
-    ax.set_ylabel("YFP Intensity")
-    ax.set_title(f"YFP to CFP Ratio: {movie_name}")
-    ax.grid(True, linestyle=":", alpha=0.6)
-    ax.legend()
-
-    fig.tight_layout()
-    st.pyplot(fig)
-    plt.close(fig)
-
-    # count points above the new spike threshold line and compute % of total
-    above_spike = int((y > threshold * x).sum())
-    total_surfaces = len(y)
-    pct_spiking = (above_spike / total_surfaces) * 100
 
     col1, col2, col3 = st.columns(3)
-    col1.metric("Spiking Surfaces", f"{above_spike} / {total_surfaces}")
+    col1.metric("Spiking Surfaces", f"{n_spike} / {n_total}")
     col2.metric("% Spiking Surfaces", f"{pct_spiking:.2f}%")
     col3.metric("Noise Threshold Ratio", f"{threshold:.3f}")
 
-    ax.set_xlim(0, x_max)
-    ax.set_ylim(0, y_max)
-    ax.set_xlabel("CFP Intensity")
-    ax.set_ylabel("YFP Intensity")
-    ax.set_title(f"YFP to CFP Ratio: {movie_name}")
-    ax.grid(True, linestyle=":", alpha=0.6)
-    ax.legend()
-
-    fig.tight_layout()
-    st.pyplot(fig)
-    plt.close(fig)
-
-    
-# old method for finding threshold by fitting YFP to CFP ratios to a regression line for each dataset
-def analyze_and_plot_regression(movie_data, movie_name, threshold_multiplier=1.4):
-    
-    # use column names to extract data and convert to np arrays to perform regression
-    cfpData = movie_data[cfp_channel]
-    yfpData = movie_data[yfp_channel]
-
-    x = cfpData.to_numpy().reshape(-1, 1)
-    y = yfpData.to_numpy().reshape(-1, 1)
-
-    if len(x) == 0:
-        print(f"No data to plot for {movie_name}")
-        return
-
-    model = LinearRegression(fit_intercept=False)
-    model.fit(x, y)
-    baseLine = model.predict(x)
-
-    (fig, ax) = plt.subplots(figsize=(10, 6))  # Set a standard size
-    ax.scatter(x, y, color="grey", label="Data Points", alpha=0.1, s=10)
-    ax.plot(
-        x,
-        baseLine,
-        color="black",
-        label=f"Regression Line (y = {model.coef_[0][0]:.2f}x)",
-    )
-
-    # compute and plot spike threshold line
-    spikeSlope = model.coef_[0][0]
-    spikeLine = threshold_multiplier * (spikeSlope * x)
-    ax.plot(
-        x,
-        spikeLine,
-        color="magenta",
-        linestyle="--",
-        label=f"Spike Threshold (y = {spikeSlope*threshold_multiplier:.2f}x)",
-    )
-
-    ax = plt.gca()  # get current axis
-
-    # this ensures about 10 ticks maximum, choosing multiples of 2, 5, or 10 automatically
-    ax.xaxis.set_major_locator(MaxNLocator(nbins=10, integer=True))
-    ax.yaxis.set_major_locator(MaxNLocator(nbins=10, integer=True))
-
-    # dynamic scaling of data
-    # add a 5% buffer so data points aren't hugging the edge of the box
-    x_max = np.max(x) * 1.05
-    y_max = np.max(y) * 1.05
-    plt.xlim(0, x_max)
-    plt.ylim(0, y_max)
-
-    # add grid to read scalability
-    plt.grid(True, linestyle=":", alpha=0.6)
-
-    # stats and formatting
-    aboveSpike = (y > spikeLine).sum()
-    totalCells = len(y)
-    ratio = aboveSpike / totalCells
-
-    plt.xlabel("CFP Intensity")
-    plt.ylabel("YFP Intensity")
-    plt.title(f"Linear Regression: {movie_name}")
-    plt.legend()
-
-    plt.tight_layout()
-    st.pyplot(fig)
-    plt.close(fig)
-
-    st.metric(f"--- Stats for {movie_name} ---", value=f"Total Cells: {totalCells}")
-    st.metric("Spiking", value=f"{aboveSpike}")
-    st.metric("Threshold", value=f"{spikeSlope*threshold_multiplier}")
-    st.metric("Ratio", value=f"{ratio:.4f}")
-
-    return spikeSlope * threshold_multiplier
-
-
+ 
 # styling
 def bold_header(filename):
     from openpyxl import load_workbook
