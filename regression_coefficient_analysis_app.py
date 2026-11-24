@@ -1,10 +1,6 @@
 from sklearn.linear_model import LinearRegression
-from scipy.interpolate import make_interp_spline
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.integrate import simpson
-from scipy.signal import find_peaks
-from numpy import trapezoid
 import pandas as pd
 import os
 import math
@@ -12,6 +8,8 @@ import argparse
 from openpyxl.styles import Font
 from matplotlib.ticker import MaxNLocator
 import streamlit as st
+from io import BytesIO
+
 
 # Imaris file is only for one movie, need to account for Imaris export headings
 st.title("T-Cell Calcium Spike Threshold Analysis")
@@ -57,11 +55,13 @@ if yfp_channel == cfp_channel:
 movie_id = st.text_input("Enter the Movie ID", value="A")
 threshold_multiplier = st.number_input(
     "Threshold multiplier",
-    value=1.4,
+    value=1.324,
     min_value=0.1,
     step=0.001,
     format="%.3f",
 )
+
+k=st.number_input("k-value", value=1, min_value=0, step=1)
 
 qc = st.checkbox("QC: filter top 1% of CFP and YFP intensities before regression")
 
@@ -87,7 +87,12 @@ def adjust_spike(spike_threshold, movie, cfp_col, yfp_col, apc_col):
     movie["Distance from Threshold Line"] = movie[yfp_col] - (movie[cfp_col] * spike_threshold)
 
     # spike value of a timepoint is set to 1 if dist from threshold > 0, else it is 0. spikes are 1's
-    movie["Spike"] = (movie["Distance from Threshold Line"] > 0).astype(int)
+    # YFP > 1.324 × slope × CFP + k
+    # if k = 1, a spike is called if the distance is greater than 1 from the threshold, rather than > 0
+    
+   # movie["Spike"] = (movie["Distance from Threshold Line"] > 1 ).astype(int)
+    movie["Spike"] = (movie[yfp_col]>((movie[cfp_col] * spike_threshold + k ))).astype(int)
+
 
     # contact value of a timepoint is set to 1 if shortest dist to APC < 1, else it is 0. contacts are 1's
     movie["Contact"] = (movie[apc_col] < 1).astype(int)
@@ -134,116 +139,94 @@ def calculate_track_ratios(movie, track_col, celltype_col=None):
 
     return track_stats
 
-# new method to calculate spike threshold adapted to the lower spread of each individual dataset
-def noise_calibrated_threshold_finder(movie_data):
+# linear regression analysis and plotting of data
+def analyze_and_plot_regression(movie_data, movie_name, threshold_multiplier):
+    
+    # find the names of the intensity columns. CFP should be first, then YFP, in the Imaris file. if not, analysis will be incorrect
+    intensity_col_names = [col for col in movie_data.columns if "Intensity" in col]
+    cfp_col_name = cfp_channel
+    yfp_col_name = yfp_channel
 
-    cfpData = movie_data[cfp_channel]
-    yfpData = movie_data[yfp_channel]
+    # use column names to extract data and convert to np arrays to perform regression
+    cfpData = movie_data[cfp_col_name]
+    yfpData = movie_data[yfp_col_name]
 
-    ratio = yfpData/cfpData
-
-    # median of all the YFP-CFP ratios in the movie
-    median_ratio=np.median(ratio)
-
-    # measure how far each value in the lower half is from the median ratio
-    lower_half=ratio[ratio<=median_ratio]
-    deviations = median_ratio - lower_half
-
-    lower_spread = 1.4826 * np.median(deviations)
-    lower_spread = max(lower_spread, 0.1)
-
-    threshold = median_ratio + 1.5 * lower_spread
-
-    return threshold, median_ratio
-
-
-
-
-def plot_spikes(movie_data, movie_name, threshold, median_ratio):
-    cfpData = movie_data[cfp_channel]
-    yfpData = movie_data[yfp_channel]
-
-    valid = np.isfinite(cfpData) & np.isfinite(yfpData)
-    x = cfpData[valid].to_numpy()
-    y = yfpData[valid].to_numpy()
+    x = cfpData.to_numpy().reshape(-1, 1)
+    y = yfpData.to_numpy().reshape(-1, 1)
 
     if len(x) == 0:
-        st.warning(f"No valid data to plot for {movie_name}")
+        print(f"No data to plot for {movie_name}")
         return
 
-    # same rule as adjust_spike: a surface spikes if YFP is above threshold * CFP
-    is_spike = y > threshold * x
-    n_spike = int(is_spike.sum())
-    n_total = len(y)
-    pct_spiking = n_spike / n_total * 100
+    model = LinearRegression(fit_intercept=False)
+    model.fit(x, y)
+    baseLine = model.predict(x)
 
-    # colors (dark pink for spiking points, brighter magenta kept for the threshold line)
-    SPIKE_COLOR = "#C2185B"
-    LINE_COLOR = "#E91E8C"
-    GREY = "#8C8C8C"
+    
 
-    with plt.rc_context({"font.size": 14, "axes.titlesize": 18, "axes.labelsize": 16}):
-        fig, ax = plt.subplots(figsize=(10, 7))
-
-        x_max = max(float(np.max(x)) * 1.05, 1.0)
-        y_max = max(float(np.max(y)) * 1.05, 1.0)
-        x_line = np.linspace(0, x_max, 200)
-
-        # light pink shading over the region above the threshold (the "spiking zone")
-        ax.fill_between(x_line, threshold * x_line, y_max, color=SPIKE_COLOR, alpha=0.06, linewidth=0, zorder=0)
-
-        # non-spiking surfaces (grey) first, spiking surfaces (dark pink) on top
-        ax.scatter(x[~is_spike], y[~is_spike], s=28, color=GREY, alpha=0.35,
-                   edgecolors="none", zorder=2, label=f"Non-spiking (n = {n_total - n_spike})")
-        ax.scatter(x[is_spike], y[is_spike], s=36, color=SPIKE_COLOR, alpha=0.85,
-                   edgecolors="white", linewidths=0.4, zorder=3, label=f"Spiking (n = {n_spike})")
-
-        # baseline (median ratio) and spike threshold lines
-        ax.plot(x_line, median_ratio * x_line, color="black", linewidth=2, zorder=4,
-                label=f"Baseline median ratio (y = {median_ratio:.2f}x)")
-        ax.plot(x_line, threshold * x_line, color=LINE_COLOR, linestyle="--", linewidth=2.5, zorder=4,
-                label=f"Spike threshold (y = {threshold:.2f}x)")
-
-        # percent spiking, clearly visible in the upper left
-        ax.text(0.03, 0.97, f"{pct_spiking:.1f}% spiking surfaces\n({n_spike} of {n_total})",
-                transform=ax.transAxes, ha="left", va="top", fontsize=18, fontweight="bold",
-                color=SPIKE_COLOR, zorder=5,
-                bbox=dict(boxstyle="round,pad=0.5", facecolor="white", edgecolor=SPIKE_COLOR, linewidth=2))
-
-        ax.set_xlim(0, x_max)
-        ax.set_ylim(0, y_max)
-        ax.set_xlabel("CFP intensity")
-        ax.set_ylabel("YFP intensity")
-        ax.set_title(f"YFP vs CFP intensity: {movie_name}", fontweight="bold")
-        ax.grid(True, linestyle=":", alpha=0.5)
-        ax.set_axisbelow(True)
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-        ax.xaxis.set_major_locator(MaxNLocator(nbins=8))
-        ax.yaxis.set_major_locator(MaxNLocator(nbins=8))
-        ax.legend(loc="lower right", frameon=True, framealpha=0.95, fontsize=12)
-
-        fig.tight_layout()
-        st.pyplot(fig)
-
-        # high-resolution copy for the poster
-        png_buffer = BytesIO()
-        fig.savefig(png_buffer, format="png", dpi=300, bbox_inches="tight")
-        plt.close(fig)
-
-    st.download_button(
-        label="Download plot (PNG, 300 dpi)",
-        data=png_buffer.getvalue(),
-        file_name=f"{movie_name}_spike_plot.png",
-        mime="image/png",
+    (fig, ax) = plt.subplots(figsize=(10, 6))  # Set a standard size
+    ax.scatter(x, y, color="grey", label="Data Points", alpha=0.1, s=10)
+    ax.plot(
+        x,
+        baseLine,
+        color="black",
+        label=f"Regression Line (y = {model.coef_[0][0]:.2f}x)",
     )
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Spiking Surfaces", f"{n_spike} / {n_total}")
-    col2.metric("% Spiking Surfaces", f"{pct_spiking:.2f}%")
-    col3.metric("Noise Threshold Ratio", f"{threshold:.3f}")
+    # compute and plot spike threshold line
+    spikeSlope = model.coef_[0][0]
 
- 
+    # change 1 eventually to k if end up using k increments method, to make k modifiable
+    spikeLine = threshold_multiplier * (spikeSlope * x) + k
+
+    
+    # stats and formatting
+    aboveSpike = (y > spikeLine).sum()
+    totalCells = len(y)
+    ratio = aboveSpike / totalCells
+
+    ax.plot(
+        x,
+        spikeLine,
+        color="magenta",
+        linestyle="--",
+        label=f"Spike Threshold (y = {spikeSlope*threshold_multiplier:.2f}x)\n"
+            f"Percentage of spiking cells = {ratio*100:.4f}%"
+    )
+
+    ax = plt.gca()  # get current axis
+
+    # this ensures about 10 ticks maximum, choosing multiples of 2, 5, or 10 automatically
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=10, integer=True))
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=10, integer=True))
+
+    # dynamic scaling of data
+    # add a 5% buffer so data points aren't hugging the edge of the box
+    x_max = np.max(x) * 1.05
+    y_max = np.max(y) * 1.05
+    plt.xlim(0, x_max)
+    plt.ylim(0, y_max)
+
+    # add grid to read scalability
+    plt.grid(True, linestyle=":", alpha=0.6)
+
+    plt.xlabel("CFP Intensity")
+    plt.ylabel("YFP Intensity")
+    plt.title(f"Linear Regression: {movie_name}")
+    plt.legend()
+
+    plt.tight_layout()
+    st.pyplot(fig)
+    plt.close(fig)
+
+    st.metric(f"--- Stats for {movie_name} ---", value=f"Total Cells: {totalCells}")
+    st.metric("Spiking", value=f"{aboveSpike}")
+    st.metric("Threshold", value=f"{spikeSlope*threshold_multiplier}")
+    st.metric("Ratio", value=f"{ratio:.4f}")
+
+    return spikeSlope * threshold_multiplier
+
+
 # styling
 def bold_header(filename):
     from openpyxl import load_workbook
@@ -275,11 +258,8 @@ if run:
         st.write(f"QC filter applied: removed {n_before - n_after} outlier rows (top 1% CFP or YFP intensity)")
    
 
-    # spike_threshold = analyze_and_plot_regression(movie_data, movie_id, threshold_multiplier)
-    spike_threshold, median_ratio=noise_calibrated_threshold_finder(movie_data)
-
+    spike_threshold = analyze_and_plot_regression(movie_data, movie_id, threshold_multiplier)
     if spike_threshold is not None:
-        plot_spikes(movie_data, movie_id, spike_threshold, median_ratio)
         adjust_spike(spike_threshold, movie_data, cfp_channel, yfp_channel, apc_shortest_dist[0])
         st.write("Analysis complete. Here are the first few rows of the processed data:")
         st.dataframe(movie_data.head())
@@ -287,23 +267,9 @@ if run:
         st.error("Analysis could not be completed due to insufficient data.")
         st.stop()
 
-    # cell type label for the track ratios, T-Cell Subset if it's in the export, otherwise Surpass Object
-    if "T-Cell Subset" in movie_data.columns:
-        celltype_col = "T-Cell Subset"
-    elif "Surpass Object" in movie_data.columns:
-        celltype_col = "Surpass Object"
-    else:
-        celltype_col = None
-
-    # once the spike threshold is locked in, the track ratios can be calculated
-    tracks = calculate_track_ratios(movie_data, track_col, celltype_col)
-    st.write("Per-track ratios:")
-    st.dataframe(tracks)
-
     buffer = BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         movie_data.to_excel(writer, sheet_name="All", index=False)
-        tracks.to_excel(writer, sheet_name="Tracks", index=False)
         if "Surpass Object" in movie_data.columns:
             for cell_type, group in movie_data.groupby("Surpass Object"):
                 group.to_excel(writer, sheet_name=str(cell_type)[:31], index=False)
